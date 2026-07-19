@@ -142,6 +142,9 @@ config XIANGSHAN_KUNMINGHU
     select RISCV_IMSIC
     select SERIAL_MM
 
+config K230_SRAM
+    bool
+
 config MIPS_BOSTON_AIA
     bool
     default y
@@ -161,4 +164,5 @@ config K230
     select RISCV_IMSIC
     select SERIAL_MM
     select UNIMP
+    select K230_SRAM
     select K230_WDT
