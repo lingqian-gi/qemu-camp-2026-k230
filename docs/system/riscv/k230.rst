@@ -19,7 +19,20 @@ The ``k230`` machine supports the following devices:
 * Core Local Interruptor (CLINT)
 * Platform-Level Interrupt Controller (PLIC)
 * 2 K230 Watchdog Timer
+* 2 MB on-chip SRAM
 * 5 UART
+
+SRAM
+~~~~
+
+The K230 shared SRAM is a 2 MB on-chip RAM block at ``0x80200000``.  It has no
+software-visible controller registers — the region is accessed directly via the
+AXI bus and modelled as a ``SysBusDevice`` with ``memory_region_init_ram``.
+
+Clock gating is controlled by the Clock Management Unit (CMU at
+``0x91100000``, offset ``0x5c``) and reset by the Reset Management Unit (RMU at
+``0x91101000``, offsets ``0x60``/``0x64``).  These system-controller peripherals
+are not modelled yet.
 
 Boot options
 ------------
