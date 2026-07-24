@@ -17,8 +17,10 @@
 #include "qemu/osdep.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
+#include "hw/core/irq.h"
 #include "hw/core/sysbus.h"
 #include "hw/ssi/k230_spi.h"
+#include "migration/vmstate.h"
 #include "trace.h"
 
 /* ------------------------------------------------------------------ */
