@@ -32,6 +32,7 @@
 #include "hw/intc/sifive_plic.h"
 #include "hw/char/serial-mm.h"
 #include "hw/misc/unimp.h"
+#include "hw/ssi/ssi.h"
 
 /* Align K230_SDK k230_canmv_defconfig */
 #define K230_DIRECT_OPENSBI_ADDR 0x8000000
@@ -232,6 +233,13 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(SYS_BUS_DEVICE(&s->spi[i]), 0,
                            qdev_get_gpio_in(DEVICE(s->c908_plic),
                                             spi_irq[i]));
+    }
+
+    /* Attach gd25q64 SPI flash to SPI controller (0x91584000, cs=0) */
+    s->spi_flash = qdev_new("gd25q64");
+    if (!ssi_realize_and_unref(s->spi_flash,
+                                s->spi[2].spi_bus, errp)) {
+        return;
     }
 
     /* unimplemented devices */

@@ -10,9 +10,9 @@
  *   - SSI2 (SPI):   0x91584000  — general-purpose SPI master
  *
  * This model implements register-level MMIO compatibility sufficient for
- * the Linux dw_spi_mmio driver to probe successfully.  Actual SPI data
- * transfer, DMA engine, XIP mode and DDR/Octal modes are not implemented
- * in this version.
+ * the Linux dw_spi_mmio driver to probe and perform PIO data transfers
+ * via the SSI bus to a m25p80 flash slave device.  DMA engine, XIP mode
+ * and DDR/Octal modes are not yet implemented.
  *
  * Copyright (c) 2026 The QEMU K230 Camp Contributors
  *
@@ -23,6 +23,7 @@
 #define K230_SPI_H
 
 #include "hw/core/sysbus.h"
+#include "hw/ssi/ssi.h"
 #include "qom/object.h"
 
 #define TYPE_K230_SPI "riscv.k230.spi"
@@ -192,6 +193,11 @@ struct K230SpiState {
     uint32_t axiar1;              /* 0x12c */
     uint32_t axiecr;              /* 0x130 — WO clear */
     uint32_t donecr;              /* 0x134 — WO clear */
+
+    /* SSI bus + transfer shadow */
+    SSIBus *spi_bus;              /* SSI bus for slave device attachment */
+    uint32_t rx_data;             /* RX shadow: byte from last ssi_transfer */
+    bool rx_pending;              /* true when rx_data holds valid byte */
 };
 
 #endif /* K230_SPI_H */

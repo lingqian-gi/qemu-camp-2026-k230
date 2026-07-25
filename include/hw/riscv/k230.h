@@ -39,6 +39,7 @@ typedef struct K230SoCState {
     MemoryRegion bootrom;
 
     DeviceState *c908_plic;
+    DeviceState *spi_flash;
 } K230SoCState;
 
 #define TYPE_RISCV_K230_MACHINE MACHINE_TYPE_NAME("k230")

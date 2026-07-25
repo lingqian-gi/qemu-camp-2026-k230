@@ -4,10 +4,10 @@
  * K230 Technical Reference Manual V0.3.1 (2024-11-18), Chapter 12.3:
  * https://github.com/revyos/external-docs/blob/master/K230/en-us/K230_Technical_Reference_Manual_V0.3.1_20241118.pdf
  *
- * Minimal register-level model covering the DW SSI standard registers
- * and K230 extensions.  Actual SPI data transfer, DMA engine, XIP and
- * DDR/Octal modes are NOT implemented — the model only ensures that the
- * Linux dw_spi_mmio driver probe() completes without hanging.
+ * Register-level model covering the DW SSI standard registers and
+ * K230 extensions, plus PIO data transfer via SSI bus to a m25p80
+ * flash slave device.  DMA engine, XIP and DDR/Octal modes are not
+ * yet implemented.
  *
  * Copyright (c) 2026 The QEMU K230 Camp Contributors
  *
@@ -20,6 +20,7 @@
 #include "hw/core/irq.h"
 #include "hw/core/sysbus.h"
 #include "hw/ssi/k230_spi.h"
+#include "hw/ssi/ssi.h"
 #include "migration/vmstate.h"
 #include "trace.h"
 
@@ -72,6 +73,9 @@ static void k230_spi_reset_hold(Object *obj, ResetType type)
     s->axiecr           = 0x00000000;
     s->donecr           = 0x00000000;
 
+    s->rx_data      = 0;
+    s->rx_pending   = false;
+
     qemu_set_irq(s->irq, 0);
 }
 
@@ -117,13 +121,17 @@ static uint64_t k230_spi_read(void *opaque, hwaddr addr, unsigned int size)
         value = s->rxflr;
         break;
     case K230_SPI_SR:
-        /*
-         * Return safe idle value (TFNF=1, TFE=1, BUSY=0).
-         * The actual value is written by the guest, but we keep the
-         * idle snapshot so that the driver busy-wait on entering a
-         * disabled state always completes immediately.
-         */
-        value = (s->sr & ~K230_SPI_SR_BUSY) | K230_SPI_SR_TFNF | K230_SPI_SR_TFE;
+        if (s->ssienr & K230_SPI_SSIENR_EN) {
+            /* SSI enabled: dynamic status, RFNE reflects rx_pending */
+            uint32_t dynamic = K230_SPI_SR_IDLE;  /* 0x06 = TFE | TFNF */
+            if (s->rx_pending) {
+                dynamic |= K230_SPI_SR_RFNE;       /* BIT(4) */
+            }
+            value = dynamic;
+        } else {
+            /* SSI disabled: fixed idle (compat with qtest sr_returns_idle) */
+            value = K230_SPI_SR_IDLE;
+        }
         break;
     case K230_SPI_IMR:
         value = s->imr;
@@ -194,7 +202,10 @@ static uint64_t k230_spi_read(void *opaque, hwaddr addr, unsigned int size)
     /* ---- Data Registers DR0 – DR35 (0x60 – 0xec) ---- */
     default:
         if (addr >= K230_SPI_DR_BASE && addr < K230_SPI_RX_SAMPLE_DELAY) {
-            /* DR is not modelled yet, return 0 */
+            if (s->rx_pending) {
+                value = s->rx_data;
+                s->rx_pending = false;
+            }
             break;
         }
         qemu_log_mask(LOG_GUEST_ERROR,
@@ -320,7 +331,10 @@ static void k230_spi_write(void *opaque, hwaddr addr,
 
     default:
         if (addr >= K230_SPI_DR_BASE && addr < K230_SPI_RX_SAMPLE_DELAY) {
-            /* DR is not modelled yet, discard the write */
+            if (s->ssienr & K230_SPI_SSIENR_EN) {
+                s->rx_data = ssi_transfer(s->spi_bus, value);
+                s->rx_pending = true;
+            }
             break;
         }
         qemu_log_mask(LOG_GUEST_ERROR,
@@ -397,6 +411,9 @@ static void k230_spi_realize(DeviceState *dev, Error **errp)
                           TYPE_K230_SPI, K230_SPI_MMIO_SIZE);
     sysbus_init_mmio(sbd, &s->mmio);
     sysbus_init_irq(sbd, &s->irq);
+
+    /* Create SSI bus for connecting flash slave devices */
+    s->spi_bus = ssi_create_bus(dev, "spi");
 }
 
 static void k230_spi_class_init(ObjectClass *klass, const void *data)
