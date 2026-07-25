@@ -27,9 +27,9 @@
 /*  Reset                                                             */
 /* ------------------------------------------------------------------ */
 
-static void k230_spi_reset(DeviceState *dev)
+static void k230_spi_reset_hold(Object *obj, ResetType type)
 {
-    K230SpiState *s = K230_SPI(dev);
+    K230SpiState *s = K230_SPI(obj);
 
     trace_k230_spi_reset();
 
@@ -402,9 +402,10 @@ static void k230_spi_realize(DeviceState *dev, Error **errp)
 static void k230_spi_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->realize = k230_spi_realize;
-    device_class_set_legacy_reset(dc, k230_spi_reset);
+    rc->phases.hold = k230_spi_reset_hold;
     dc->vmsd = &vmstate_k230_spi;
     dc->desc = "K230 SPI / QSPI controller (Synopsys DW SSI)";
 }
