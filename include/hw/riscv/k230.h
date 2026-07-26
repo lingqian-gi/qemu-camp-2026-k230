@@ -132,9 +132,12 @@ enum {
     K230_UART4_IRQ  = 20,
     K230_WDT0_IRQ   = 107,
     K230_WDT1_IRQ   = 108,
-    K230_SPI0_IRQ   = 94,
-    K230_SPI1_IRQ   = 95,
-    K230_SPI2_IRQ   = 96,
+    /* SPI interrupt numbers per K230 SDK DTB:
+     *   QSPI0: 0x9b = 155, QSPI1: 0xa4 = 164, SPI: 0x92 = 146
+     */
+    K230_SPI0_IRQ   = 155,
+    K230_SPI1_IRQ   = 164,
+    K230_SPI2_IRQ   = 146,
 };
 
 #define K230_UART_COUNT 5

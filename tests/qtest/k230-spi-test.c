@@ -9,7 +9,9 @@
  * https://github.com/revyos/external-docs/blob/master/K230/en-us/K230_Technical_Reference_Manual_V0.3.1_20241118.pdf
  *
  * Tests the register-level MMIO behaviour of the three DW SSI instances
- * (QSPI0 / QSPI1 / SPI).  Data transfer, DMA and XIP are not covered.
+ * (QSPI0 / QSPI1 / SPI), plus PIO data transfer via SSI bus to the
+ * gd25q64 flash slave attached to SPI (0x91584000).  DMA and XIP are
+ * not covered.
  */
 
 #include "qemu/osdep.h"
@@ -285,6 +287,166 @@ static void test_wo_clear_isr(void)
 }
 
 /* ------------------------------------------------------------------ */
+/*  11. DR PIO transfer flow on SPI with gd25q64 flash slave           */
+/*      JEDEC ID sequence: 0x9F → 0 (cmd ack), then 0xC8,0x40,0x17    */
+/* ------------------------------------------------------------------ */
+
+static void test_dr_transfer_flow(void)
+{
+    QTestState *qts = qtest_init("-machine k230");
+    uint32_t sr, dr;
+
+    /* Enable SSI */
+    qtest_writel(qts, SPI_BASE + K230_SPI_SSIENR, 1);
+
+    /*
+     * Transfer 1: send JEDEC_READ command (0x9F).
+     * The flash decodes the command and enters STATE_READING_DATA.
+     * No data byte is returned on the command transfer itself → rx_data = 0.
+     */
+    qtest_writel(qts, SPI_BASE + K230_SPI_DR_BASE, 0x9F);
+
+    /* SR should show RFNE=1 (rx_pending set after ssi_transfer) */
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, K230_SPI_SR_RFNE);
+
+    /* Read DR → consume rx_data, rx_pending cleared */
+    dr = qtest_readl(qts, SPI_BASE + K230_SPI_DR_BASE);
+    g_assert_cmphex(dr, ==, 0);
+
+    /* SR goes back to idle (RFNE=0) */
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, 0);
+
+    /*
+     * Transfer 2: dummy byte → flash returns first JEDEC ID byte.
+     * gd25q64 manufacturer ID = 0xC8 (GigaDevice).
+     */
+    qtest_writel(qts, SPI_BASE + K230_SPI_DR_BASE, 0x00);
+
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, K230_SPI_SR_RFNE);
+
+    dr = qtest_readl(qts, SPI_BASE + K230_SPI_DR_BASE);
+    g_assert_cmphex(dr, ==, 0xc8);
+
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, 0);
+
+    /*
+     * Transfer 3: memory type byte = 0x40.
+     */
+    qtest_writel(qts, SPI_BASE + K230_SPI_DR_BASE, 0x00);
+
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, K230_SPI_SR_RFNE);
+
+    dr = qtest_readl(qts, SPI_BASE + K230_SPI_DR_BASE);
+    g_assert_cmphex(dr, ==, 0x40);
+
+    /*
+     * Transfer 4: capacity byte = 0x17.
+     */
+    qtest_writel(qts, SPI_BASE + K230_SPI_DR_BASE, 0x00);
+
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, K230_SPI_SR_RFNE);
+
+    dr = qtest_readl(qts, SPI_BASE + K230_SPI_DR_BASE);
+    g_assert_cmphex(dr, ==, 0x17);
+
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, 0);
+
+    /* Disable SSI */
+    qtest_writel(qts, SPI_BASE + K230_SPI_SSIENR, 0);
+
+    qtest_quit(qts);
+}
+
+/* ------------------------------------------------------------------ */
+/*  12. DR write ignored when SSIENR is disabled                       */
+/* ------------------------------------------------------------------ */
+
+static void test_dr_transfer_without_ssienr(void)
+{
+    QTestState *qts = qtest_init("-machine k230");
+    uint32_t sr, dr;
+
+    /* SSIENR is 0 by default — write to DR should be ignored */
+    qtest_writel(qts, QSPI0_BASE + K230_SPI_DR_BASE, 0xDEADBEEF);
+
+    /* SR should remain idle (0x06), RFNE=0 */
+    sr = qtest_readl(qts, QSPI0_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, 0);
+    g_assert_cmphex(sr, ==, K230_SPI_SR_IDLE);
+
+    /* DR read should return 0 (no pending data) */
+    dr = qtest_readl(qts, QSPI0_BASE + K230_SPI_DR_BASE);
+    g_assert_cmphex(dr, ==, 0);
+
+    qtest_quit(qts);
+}
+
+/* ------------------------------------------------------------------ */
+/*  13. SR dynamic RFNE lifecycle: SSIENR-gated + read-once            */
+/* ------------------------------------------------------------------ */
+
+static void test_sr_rfne_lifecycle(void)
+{
+    QTestState *qts = qtest_init("-machine k230");
+    uint32_t sr;
+
+    /*
+     * Phase 1: SSI disabled → SR returns fixed idle.
+     * Even writing BUSY=1 to SR should be masked by the read path.
+     */
+    g_assert_cmphex(qtest_readl(qts, SPI_BASE + K230_SPI_SSIENR), ==, 0);
+
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr, ==, K230_SPI_SR_IDLE);
+
+    qtest_writel(qts, SPI_BASE + K230_SPI_SR, K230_SPI_SR_BUSY);
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_BUSY, ==, 0);
+    g_assert_cmphex(sr, ==, K230_SPI_SR_IDLE);
+
+    /*
+     * Phase 2: Enable SSI → dynamic SR mode, RFNE=0 (no pending data).
+     */
+    qtest_writel(qts, SPI_BASE + K230_SPI_SSIENR, 1);
+
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, 0);
+
+    /*
+     * Phase 3: Write DR → ssi_transfer → rx_pending=true → SR gets RFNE.
+     */
+    qtest_writel(qts, SPI_BASE + K230_SPI_DR_BASE, 0x9F);
+
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, K230_SPI_SR_RFNE);
+
+    /*
+     * Phase 4: Read DR → rx_pending cleared → SR loses RFNE.
+     */
+    qtest_readl(qts, SPI_BASE + K230_SPI_DR_BASE);
+
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, 0);
+
+    /*
+     * Phase 5: Disable SSI → back to fixed idle.
+     */
+    qtest_writel(qts, SPI_BASE + K230_SPI_SSIENR, 0);
+
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr, ==, K230_SPI_SR_IDLE);
+
+    qtest_quit(qts);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Test registration                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -303,6 +465,10 @@ int main(int argc, char *argv[])
     qtest_add_func("/k230-spi/fifo_threshold_mask",     test_fifo_threshold_mask);
     qtest_add_func("/k230-spi/all_three_instances",     test_all_three_instances);
     qtest_add_func("/k230-spi/wo_clear_isr",            test_wo_clear_isr);
+    qtest_add_func("/k230-spi/dr_transfer_flow",        test_dr_transfer_flow);
+    qtest_add_func("/k230-spi/dr_transfer_without_ssienr",
+                                                       test_dr_transfer_without_ssienr);
+    qtest_add_func("/k230-spi/sr_rfne_lifecycle",       test_sr_rfne_lifecycle);
 
     return g_test_run();
 }

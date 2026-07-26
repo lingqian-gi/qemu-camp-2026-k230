@@ -73,8 +73,9 @@ static void k230_spi_reset_hold(Object *obj, ResetType type)
     s->axiecr           = 0x00000000;
     s->donecr           = 0x00000000;
 
-    s->rx_data      = 0;
-    s->rx_pending   = false;
+    s->rx_fifo_count = 0;
+    s->tx_fifo_count = 0;
+    s->ndf_pending   = false;
 
     qemu_set_irq(s->irq, 0);
 }
@@ -115,16 +116,16 @@ static uint64_t k230_spi_read(void *opaque, hwaddr addr, unsigned int size)
         value = s->rxftlr;
         break;
     case K230_SPI_TXFLR:
-        value = s->txflr;
+        value = s->tx_fifo_count;
         break;
     case K230_SPI_RXFLR:
-        value = s->rxflr;
+        value = s->rx_fifo_count;
         break;
     case K230_SPI_SR:
         if (s->ssienr & K230_SPI_SSIENR_EN) {
-            /* SSI enabled: dynamic status, RFNE reflects rx_pending */
+            /* SSI enabled: dynamic status, RFNE reflects rx_fifo_count */
             uint32_t dynamic = K230_SPI_SR_IDLE;  /* 0x06 = TFE | TFNF */
-            if (s->rx_pending) {
+            if (s->rx_fifo_count > 0) {
                 dynamic |= K230_SPI_SR_RFNE;       /* BIT(4) */
             }
             value = dynamic;
@@ -202,9 +203,16 @@ static uint64_t k230_spi_read(void *opaque, hwaddr addr, unsigned int size)
     /* ---- Data Registers DR0 – DR35 (0x60 – 0xec) ---- */
     default:
         if (addr >= K230_SPI_DR_BASE && addr < K230_SPI_RX_SAMPLE_DELAY) {
-            if (s->rx_pending) {
-                value = s->rx_data;
-                s->rx_pending = false;
+            if (s->rx_fifo_count > 0) {
+                value = s->rx_fifo[0];
+                memmove(s->rx_fifo, s->rx_fifo + 1,
+                        (s->rx_fifo_count - 1) * sizeof(s->rx_fifo[0]));
+                s->rx_fifo_count--;
+                if (s->rx_fifo_count == 0) {
+                    s->isr &= ~K230_SPI_ISR_RXFI;
+                    s->risr = s->isr;
+                    qemu_set_irq(s->irq, 0);
+                }
             }
             break;
         }
@@ -238,6 +246,10 @@ static void k230_spi_write(void *opaque, hwaddr addr,
         s->ctrlr1 = value & 0x0000ffff;   /* NDF[15:0] */
         break;
     case K230_SPI_SSIENR:
+        /* Set ndf_pending when enabling SSI; cleared on first DR write */
+        if ((value & K230_SPI_SSIENR_EN) && !(s->ssienr & K230_SPI_SSIENR_EN)) {
+            s->ndf_pending = true;
+        }
         s->ssienr = value & K230_SPI_SSIENR_EN;
         break;
     case K230_SPI_MWCR:
@@ -332,8 +344,47 @@ static void k230_spi_write(void *opaque, hwaddr addr,
     default:
         if (addr >= K230_SPI_DR_BASE && addr < K230_SPI_RX_SAMPLE_DELAY) {
             if (s->ssienr & K230_SPI_SSIENR_EN) {
-                s->rx_data = ssi_transfer(s->spi_bus, value);
-                s->rx_pending = true;
+                uint32_t ndf = s->ctrlr1 & 0xffff;
+                uint32_t frames;
+
+                if (s->ndf_pending) {
+                    frames = ndf + 1;
+                    s->ndf_pending = false;
+
+                    /* Command frame response is prepended to the RX
+                     * stream by the DW SSI hardware; the kernel driver
+                     * merges command + data into a single transfer.
+                     * Shift responses left by one so the data-phase
+                     * bytes start at FIFO[0], matching the JEDEC ID
+                     * layout the spi-nor framework expects.
+                     */
+                    for (uint32_t f = 0; f < frames; f++) {
+                        uint32_t txw = (f == 0) ? (uint32_t)value : 0;
+                        uint32_t rx = ssi_transfer(s->spi_bus, txw);
+                        if (f > 0) {
+                            /* Shift: response goes to FIFO[f-1] */
+                            if (s->rx_fifo_count < 256) {
+                                s->rx_fifo[s->rx_fifo_count] = rx;
+                                s->rx_fifo_count++;
+                            }
+                        }
+                    }
+                    /* Pad to keep NDF+1 entries for the driver */
+                    if (s->rx_fifo_count < 256) {
+                        s->rx_fifo[s->rx_fifo_count] = 0;
+                        s->rx_fifo_count++;
+                    }
+                } else {
+                    /* Single frame: push response to FIFO */
+                    if (s->rx_fifo_count < 256) {
+                        s->rx_fifo[s->rx_fifo_count] =
+                            ssi_transfer(s->spi_bus, value);
+                        s->rx_fifo_count++;
+                    }
+                }
+                s->isr |= K230_SPI_ISR_RXFI;
+                s->risr = s->isr;
+                qemu_set_irq(s->irq, 1);
             }
             break;
         }

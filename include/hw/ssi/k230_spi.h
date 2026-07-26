@@ -133,6 +133,12 @@ enum K230SpiRegisters {
 #define K230_SPI_SR_IDLE             0x00000006
 
 /*
+ * ISR — Interrupt Status Register (offset 0x30)
+ * Bit 4: RXFI — RX FIFO interrupt (data available), per DW SSI spec
+ */
+#define K230_SPI_ISR_RXFI            BIT(4)
+
+/*
  * IDR — Identification Register (offset 0x58) — constant
  */
 #define K230_SPI_IDR_VAL             0xa1b2c3d5
@@ -194,10 +200,16 @@ struct K230SpiState {
     uint32_t axiecr;              /* 0x130 — WO clear */
     uint32_t donecr;              /* 0x134 — WO clear */
 
-    /* SSI bus + transfer shadow */
+    /* SSI bus + RX FIFO (256 deep, matching reported FIFO size) */
     SSIBus *spi_bus;              /* SSI bus for slave device attachment */
-    uint32_t rx_data;             /* RX shadow: byte from last ssi_transfer */
-    bool rx_pending;              /* true when rx_data holds valid byte */
+    uint32_t rx_fifo[256];        /* RX FIFO: stores ssi_transfer responses */
+    uint32_t rx_fifo_count;       /* Number of valid entries in rx_fifo */
+
+    /* TX FIFO shadow — always reports empty in current model */
+    uint32_t tx_fifo_count;       /* TX FIFO level (always 0) */
+
+    /* NDF burst tracking: true between SSIENR enable and first DR write */
+    bool ndf_pending;
 };
 
 #endif /* K230_SPI_H */
