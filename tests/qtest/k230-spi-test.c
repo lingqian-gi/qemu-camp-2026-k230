@@ -287,8 +287,8 @@ static void test_wo_clear_isr(void)
 }
 
 /* ------------------------------------------------------------------ */
-/*  11. DR PIO transfer flow on SPI with gd25q64 flash slave           */
-/*      JEDEC ID sequence: 0x9F → 0 (cmd ack), then 0xC8,0x40,0x17    */
+/*  11. DR PIO transfer flow on SPI with w25q64 flash slave            */
+/*      JEDEC ID sequence: 0x9F → 0 (cmd ack), then 0xEF,0x40,0x17    */
 /* ------------------------------------------------------------------ */
 
 static void test_dr_transfer_flow(void)
@@ -320,7 +320,7 @@ static void test_dr_transfer_flow(void)
 
     /*
      * Transfer 2: dummy byte → flash returns first JEDEC ID byte.
-     * gd25q64 manufacturer ID = 0xC8 (GigaDevice).
+     * w25q64 manufacturer ID = 0xEF (Winbond).
      */
     qtest_writel(qts, SPI_BASE + K230_SPI_DR_BASE, 0x00);
 
@@ -328,7 +328,7 @@ static void test_dr_transfer_flow(void)
     g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, K230_SPI_SR_RFNE);
 
     dr = qtest_readl(qts, SPI_BASE + K230_SPI_DR_BASE);
-    g_assert_cmphex(dr, ==, 0xc8);
+    g_assert_cmphex(dr, ==, 0xef);
 
     sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
     g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, 0);

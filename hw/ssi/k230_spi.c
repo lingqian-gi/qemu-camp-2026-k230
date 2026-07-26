@@ -76,6 +76,7 @@ static void k230_spi_reset_hold(Object *obj, ResetType type)
     s->rx_fifo_count = 0;
     s->tx_fifo_count = 0;
     s->ndf_pending   = false;
+    s->burst_active  = false;
 
     qemu_set_irq(s->irq, 0);
 }
@@ -246,9 +247,38 @@ static void k230_spi_write(void *opaque, hwaddr addr,
         s->ctrlr1 = value & 0x0000ffff;   /* NDF[15:0] */
         break;
     case K230_SPI_SSIENR:
-        /* Set ndf_pending when enabling SSI; cleared on first DR write */
+        /* Enable: assert CS on all SSI bus peripherals so
+         * ssi_transfer_raw_default() forwards bytes to the
+         * flash.  Also arm the NDF burst for the first DR
+         * write. */
         if ((value & K230_SPI_SSIENR_EN) && !(s->ssienr & K230_SPI_SSIENR_EN)) {
             s->ndf_pending = true;
+            {
+                BusState *bs = BUS(s->spi_bus);
+                BusChild *kid;
+                QTAILQ_FOREACH(kid, &bs->children, sibling) {
+                    qemu_irq cs = qdev_get_gpio_in_named(
+                        kid->child, SSI_GPIO_CS, 0);
+                    qemu_set_irq(cs, 0);  /* assert CS (active-low) */
+                }
+            }
+        }
+        /* Disable: de-assert CS.  The SSI peripheral's set_cs
+         * callback resets the flash state machine to IDLE so
+         * the next command word is decoded correctly. */
+        if (!(value & K230_SPI_SSIENR_EN) && (s->ssienr & K230_SPI_SSIENR_EN)) {
+            {
+                BusState *bs = BUS(s->spi_bus);
+                BusChild *kid;
+                QTAILQ_FOREACH(kid, &bs->children, sibling) {
+                    qemu_irq cs = qdev_get_gpio_in_named(
+                        kid->child, SSI_GPIO_CS, 0);
+                    qemu_set_irq(cs, 1);  /* de-assert CS */
+                }
+            }
+            s->rx_fifo_count = 0;
+            s->tx_fifo_count = 0;
+            s->burst_active  = false;
         }
         s->ssienr = value & K230_SPI_SSIENR_EN;
         break;
@@ -345,46 +375,58 @@ static void k230_spi_write(void *opaque, hwaddr addr,
         if (addr >= K230_SPI_DR_BASE && addr < K230_SPI_RX_SAMPLE_DELAY) {
             if (s->ssienr & K230_SPI_SSIENR_EN) {
                 uint32_t ndf = s->ctrlr1 & 0xffff;
-                uint32_t frames;
 
-                if (s->ndf_pending) {
-                    frames = ndf + 1;
+                /* After the NDF burst has started, the kernel
+                 * may write the remaining data bytes to DR.
+                 * These are redundant — the burst already sent
+                 * them via auto-generated frames.  Silently
+                 * consume them to avoid corrupting the flash
+                 * state machine with spurious commands. */
+                if (s->burst_active) {
+                    break;
+                }
+
+                if (s->ndf_pending && ndf > 0) {
+                    /* Multi-frame NDF burst: the first DR write
+                     * after SSIENR enable triggers NDF+1 frames.
+                     * Frame 0 carries the SPI command opcode
+                     * whose response is consumed by the DW SSI
+                     * hardware and must not reach the driver's
+                     * rx buffer.  Push only frames [1..ndf],
+                     * then pad with one zero to maintain the
+                     * full NDF+1 count so the driver's DR
+                     * read loop always completes. */
+                    uint32_t frames = ndf + 1;
                     s->ndf_pending = false;
+                    s->burst_active = true;
 
-                    /* Command frame response is prepended to the RX
-                     * stream by the DW SSI hardware; the kernel driver
-                     * merges command + data into a single transfer.
-                     * Shift responses left by one so the data-phase
-                     * bytes start at FIFO[0], matching the JEDEC ID
-                     * layout the spi-nor framework expects.
-                     */
                     for (uint32_t f = 0; f < frames; f++) {
                         uint32_t txw = (f == 0) ? (uint32_t)value : 0;
                         uint32_t rx = ssi_transfer(s->spi_bus, txw);
-                        if (f > 0) {
-                            /* Shift: response goes to FIFO[f-1] */
-                            if (s->rx_fifo_count < 256) {
-                                s->rx_fifo[s->rx_fifo_count] = rx;
-                                s->rx_fifo_count++;
-                            }
+                        if (f > 0 && s->rx_fifo_count < 256) {
+                            s->rx_fifo[s->rx_fifo_count++] = rx;
                         }
                     }
-                    /* Pad to keep NDF+1 entries for the driver */
+                    /* Pad: keep NDF+1 entries so dw_reader never stalls */
                     if (s->rx_fifo_count < 256) {
-                        s->rx_fifo[s->rx_fifo_count] = 0;
-                        s->rx_fifo_count++;
+                        s->rx_fifo[s->rx_fifo_count++] = 0;
                     }
                 } else {
-                    /* Single frame: push response to FIFO */
+                    /* Single frame (or NDF=0): push response to FIFO */
+                    s->ndf_pending = false;
                     if (s->rx_fifo_count < 256) {
-                        s->rx_fifo[s->rx_fifo_count] =
+                        s->rx_fifo[s->rx_fifo_count++] =
                             ssi_transfer(s->spi_bus, value);
-                        s->rx_fifo_count++;
                     }
                 }
+                /* ISR / RISR always reflect raw status;
+                 * the IRQ line is asserted only when the
+                 * corresponding IMR bit is set (DW SSI 3.2.10). */
                 s->isr |= K230_SPI_ISR_RXFI;
                 s->risr = s->isr;
-                qemu_set_irq(s->irq, 1);
+                if (s->imr & K230_SPI_ISR_RXFI) {
+                    qemu_set_irq(s->irq, 1);
+                }
             }
             break;
         }

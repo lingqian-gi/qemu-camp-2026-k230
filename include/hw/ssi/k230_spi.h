@@ -205,11 +205,17 @@ struct K230SpiState {
     uint32_t rx_fifo[256];        /* RX FIFO: stores ssi_transfer responses */
     uint32_t rx_fifo_count;       /* Number of valid entries in rx_fifo */
 
-    /* TX FIFO shadow — always reports empty in current model */
-    uint32_t tx_fifo_count;       /* TX FIFO level (always 0) */
+    /* TX FIFO: buffers DR writes during NDF burst assembly */
+    uint32_t tx_fifo[256];        /* pending TX bytes for the burst */
+    uint32_t tx_fifo_count;       /* Number of valid entries in tx_fifo */
 
     /* NDF burst tracking: true between SSIENR enable and first DR write */
     bool ndf_pending;
+
+    /* Suppress extra DR writes while NDF burst is active.
+     * The kernel writes duplicate bytes after the initial
+     * DR write — the burst already sent them. */
+    bool burst_active;
 };
 
 #endif /* K230_SPI_H */

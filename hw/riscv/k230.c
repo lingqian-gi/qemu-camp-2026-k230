@@ -235,8 +235,8 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
                                             spi_irq[i]));
     }
 
-    /* Attach gd25q64 SPI flash to SPI controller (0x91584000, cs=0) */
-    s->spi_flash = qdev_new("gd25q64");
+    /* Attach w25q64 SPI flash to SPI controller (0x91584000, cs=0) */
+    s->spi_flash = qdev_new("w25q64");
     if (!ssi_realize_and_unref(s->spi_flash,
                                 s->spi[2].spi_bus, errp)) {
         return;
