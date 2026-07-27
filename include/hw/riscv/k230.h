@@ -147,6 +147,7 @@ enum {
     /* SDHCI interrupt numbers per K230 SDK DTB:
      *   SDHCI0: 0x8e = 142, SDHCI1: 0x90 = 144
      */
+    K230_GSDMA_IRQ  = 140,
     K230_SDHCI0_IRQ = 142,
     K230_SDHCI1_IRQ = 144,
 };

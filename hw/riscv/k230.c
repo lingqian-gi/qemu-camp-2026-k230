@@ -253,6 +253,9 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->gsdma), 0,
                     memmap[K230_DEV_GSDMA].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->gsdma), 0,
+                       qdev_get_gpio_in(DEVICE(s->c908_plic),
+                                        K230_GSDMA_IRQ));
 
     /* CMU (Clock Management Unit) */
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->cmu), errp)) {
