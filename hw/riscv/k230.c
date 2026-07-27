@@ -116,6 +116,8 @@ static void k230_soc_init(Object *obj)
     object_initialize_child(obj, "k230-spi0", &s->spi[0], TYPE_K230_SPI);
     object_initialize_child(obj, "k230-spi1", &s->spi[1], TYPE_K230_SPI);
     object_initialize_child(obj, "k230-spi2", &s->spi[2], TYPE_K230_SPI);
+    object_initialize_child(obj, "k230-gsdma", &s->gsdma, TYPE_K230_GSDMA);
+    object_initialize_child(obj, "k230-cmu", &s->cmu, TYPE_K230_CMU);
     object_initialize_child(obj, "k230-sdhci0", &s->sdhci[0], TYPE_K230_SDHCI);
     object_initialize_child(obj, "k230-sdhci1", &s->sdhci[1], TYPE_K230_SDHCI);
 
@@ -245,6 +247,19 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
         return;
     }
 
+    /* GSDMA (SDMA + GDMA) */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->gsdma), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->gsdma), 0,
+                    memmap[K230_DEV_GSDMA].base);
+
+    /* CMU (Clock Management Unit) */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->cmu), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->cmu), 0, memmap[K230_DEV_CMU].base);
+
     /* SDHCI (SD/MMC) */
     static const int sdhci_irq[2] = {
         K230_SDHCI0_IRQ, K230_SDHCI1_IRQ
@@ -264,16 +279,21 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
                                             sdhci_irq[i]));
     }
 
-    /* Attach SD cards to SDHCI controllers */
-    for (int i = 0; i < 2; i++) {
-        DriveInfo *di = drive_get(IF_SD, 0, i);
+    /* Attach SD card to SDHCI1 (SD card slot).
+     * SDHCI0 is wired as eMMC on the K230 board; the K230 SDK
+     * driver's SDIO probe loop currently blocks MMC detection in
+     * QEMU.  Leave SDHCI0 without a card until CMU/PHY/GPIO are
+     * modelled so the driver can be debugged at source level.
+     */
+    do {
+        DriveInfo *di = drive_get(IF_SD, 0, 1);
         BlockBackend *blk = di ? blk_by_legacy_dinfo(di) : NULL;
         DeviceState *card;
 
         card = qdev_new(TYPE_SD_CARD);
         qdev_prop_set_drive_err(card, "drive", blk, &error_fatal);
-        qdev_realize_and_unref(card, s->sdhci[i].bus, &error_fatal);
-    }
+        qdev_realize_and_unref(card, s->sdhci[1].bus, &error_fatal);
+    } while (0);
 
     /* unimplemented devices */
     create_unimplemented_device("kpu.l2-cache",
@@ -289,9 +309,6 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     create_unimplemented_device("2d-engine.ai",
                                 memmap[K230_DEV_AI_2D_ENGINE].base,
                                 memmap[K230_DEV_AI_2D_ENGINE].size);
-
-    create_unimplemented_device("gsdma", memmap[K230_DEV_GSDMA].base,
-                                memmap[K230_DEV_GSDMA].size);
 
     create_unimplemented_device("dma", memmap[K230_DEV_DMA].base,
                                 memmap[K230_DEV_DMA].size);
@@ -333,9 +350,6 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
 
     create_unimplemented_device("rtc", memmap[K230_DEV_RTC].base,
                                 memmap[K230_DEV_RTC].size);
-
-    create_unimplemented_device("cmu", memmap[K230_DEV_CMU].base,
-                                memmap[K230_DEV_CMU].size);
 
     create_unimplemented_device("rmu", memmap[K230_DEV_RMU].base,
                                 memmap[K230_DEV_RMU].size);

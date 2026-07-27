@@ -17,6 +17,8 @@
 
 #include "hw/core/boards.h"
 #include "hw/riscv/riscv_hart.h"
+#include "hw/dma/k230_gsdma.h"
+#include "hw/misc/k230_cmu.h"
 #include "hw/sd/k230_sdhci.h"
 #include "hw/ssi/k230_spi.h"
 #include "hw/watchdog/k230_wdt.h"
@@ -36,6 +38,8 @@ typedef struct K230SoCState {
 
     K230WdtState wdt[2];
     K230SpiState spi[3];
+    K230GSDMAState gsdma;
+    K230CmuState cmu;
     K230SdhciState sdhci[2];
     MemoryRegion sram;
     MemoryRegion bootrom;

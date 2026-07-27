@@ -22,6 +22,7 @@
 
 #include "hw/core/sysbus.h"
 #include "hw/sd/sdhci.h"
+#include "qemu/timer.h"
 #include "qom/object.h"
 
 #define TYPE_K230_SDHCI "riscv.k230.sdhci"
@@ -64,14 +65,21 @@ OBJECT_DECLARE_SIMPLE_TYPE(K230SdhciState, K230_SDHCI)
 /* Device State                                                        */
 /* ------------------------------------------------------------------ */
 
+#define K230_SDHCI_VENDOR_SIZE    (K230_SDHCI_MMIO_SIZE - 0x100)
+
 struct K230SdhciState {
     /*< private >*/
     SysBusDevice parent_obj;
 
     /*< public >*/
     MemoryRegion container;         /* top-level container (0x1000 bytes) */
+    MemoryRegion vendor;            /* vendor-specific area (0x100-0xFFF) */
     SDHCIState sdhci;               /* embedded standard SDHCI child */
     BusState *bus;                  /* sd-bus from child (for SD card attach) */
+    QEMUTimer *card_timer;          /* periodic card-reinsert timer */
+
+    /* Flat array backing the vendor-specific MMIO region (0xF00 bytes) */
+    uint32_t vendor_regs[K230_SDHCI_VENDOR_SIZE / 4];
 };
 
 #endif /* K230_SDHCI_H */

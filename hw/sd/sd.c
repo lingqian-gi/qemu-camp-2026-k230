@@ -2281,9 +2281,13 @@ static sd_rsp_type_t sd_cmd_SEND_OP_COND(SDState *sd, SDRequest req)
      * UEFI, which sends an initial enquiry ACMD41, but
      * assumes that the card is in ready state as soon as it
      * sees the power up bit set.
+     *
+     * For eMMC CMD1, the driver sends arg=0 to poll, expecting
+     * an immediate CARD_POWER_UP response and ready-state
+     * transition without an explicit voltage-window match.
      */
     if (!FIELD_EX32(sd->ocr, OCR, CARD_POWER_UP)) {
-        if ((req.arg & ACMD41_ENQUIRY_MASK) != 0) {
+        if (sd_is_emmc(sd) || (req.arg & ACMD41_ENQUIRY_MASK) != 0) {
             timer_del(sd->ocr_power_timer);
             sd_ocr_powerup(sd);
         } else {
@@ -2300,7 +2304,8 @@ static sd_rsp_type_t sd_cmd_SEND_OP_COND(SDState *sd, SDRequest req)
         sd->state = sd_ready_state;
         return sd_r1;
     } else {
-        if (FIELD_EX32(sd->ocr & req.arg, OCR, VDD_VOLTAGE_WINDOW)) {
+        if (FIELD_EX32(sd->ocr & req.arg, OCR, VDD_VOLTAGE_WINDOW)
+            || sd_is_emmc(sd)) {
             /*
              * We accept any voltage.  10000 V is nothing.
              *
