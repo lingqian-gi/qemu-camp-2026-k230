@@ -33,6 +33,7 @@
 #include "hw/char/serial-mm.h"
 #include "hw/misc/unimp.h"
 #include "hw/ssi/ssi.h"
+#include "hw/sd/sd.h"
 
 /* Align K230_SDK k230_canmv_defconfig */
 #define K230_DIRECT_OPENSBI_ADDR 0x8000000
@@ -261,6 +262,17 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(SYS_BUS_DEVICE(&s->sdhci[i]), 0,
                            qdev_get_gpio_in(DEVICE(s->c908_plic),
                                             sdhci_irq[i]));
+    }
+
+    /* Attach SD cards to SDHCI controllers */
+    for (int i = 0; i < 2; i++) {
+        DriveInfo *di = drive_get(IF_SD, 0, i);
+        BlockBackend *blk = di ? blk_by_legacy_dinfo(di) : NULL;
+        DeviceState *card;
+
+        card = qdev_new(TYPE_SD_CARD);
+        qdev_prop_set_drive_err(card, "drive", blk, &error_fatal);
+        qdev_realize_and_unref(card, s->sdhci[i].bus, &error_fatal);
     }
 
     /* unimplemented devices */
