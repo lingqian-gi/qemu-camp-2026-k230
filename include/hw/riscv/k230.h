@@ -17,6 +17,7 @@
 
 #include "hw/core/boards.h"
 #include "hw/riscv/riscv_hart.h"
+#include "hw/sd/k230_sdhci.h"
 #include "hw/ssi/k230_spi.h"
 #include "hw/watchdog/k230_wdt.h"
 
@@ -35,6 +36,7 @@ typedef struct K230SoCState {
 
     K230WdtState wdt[2];
     K230SpiState spi[3];
+    K230SdhciState sdhci[2];
     MemoryRegion sram;
     MemoryRegion bootrom;
 
@@ -138,6 +140,11 @@ enum {
     K230_SPI0_IRQ   = 155,
     K230_SPI1_IRQ   = 164,
     K230_SPI2_IRQ   = 146,
+    /* SDHCI interrupt numbers per K230 SDK DTB:
+     *   SDHCI0: 0x8e = 142, SDHCI1: 0x90 = 144
+     */
+    K230_SDHCI0_IRQ = 142,
+    K230_SDHCI1_IRQ = 144,
 };
 
 #define K230_UART_COUNT 5

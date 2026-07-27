@@ -20,6 +20,9 @@ config SDHCI_PCI
     depends on PCI
     select SDHCI
 
+config K230_SDHCI
+    bool
+
 config CADENCE_SDHCI
     bool
     select SDHCI

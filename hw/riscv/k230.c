@@ -115,6 +115,8 @@ static void k230_soc_init(Object *obj)
     object_initialize_child(obj, "k230-spi0", &s->spi[0], TYPE_K230_SPI);
     object_initialize_child(obj, "k230-spi1", &s->spi[1], TYPE_K230_SPI);
     object_initialize_child(obj, "k230-spi2", &s->spi[2], TYPE_K230_SPI);
+    object_initialize_child(obj, "k230-sdhci0", &s->sdhci[0], TYPE_K230_SDHCI);
+    object_initialize_child(obj, "k230-sdhci1", &s->sdhci[1], TYPE_K230_SDHCI);
 
     qdev_prop_set_uint32(DEVICE(cpu0), "hartid-base", 0);
     qdev_prop_set_string(DEVICE(cpu0), "cpu-type", TYPE_RISCV_CPU_THEAD_C908);
@@ -240,6 +242,25 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     if (!ssi_realize_and_unref(s->spi_flash,
                                 s->spi[2].spi_bus, errp)) {
         return;
+    }
+
+    /* SDHCI (SD/MMC) */
+    static const int sdhci_irq[2] = {
+        K230_SDHCI0_IRQ, K230_SDHCI1_IRQ
+    };
+    static const int sdhci_dev[2] = {
+        K230_DEV_SD0, K230_DEV_SD1
+    };
+
+    for (int i = 0; i < 2; i++) {
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->sdhci[i]), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(&s->sdhci[i]), 0,
+                        memmap[sdhci_dev[i]].base);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->sdhci[i]), 0,
+                           qdev_get_gpio_in(DEVICE(s->c908_plic),
+                                            sdhci_irq[i]));
     }
 
     /* unimplemented devices */
@@ -378,12 +399,6 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
 
     create_unimplemented_device("usb1", memmap[K230_DEV_USB1].base,
                                 memmap[K230_DEV_USB1].size);
-
-    create_unimplemented_device("sd0", memmap[K230_DEV_SD0].base,
-                                memmap[K230_DEV_SD0].size);
-
-    create_unimplemented_device("sd1", memmap[K230_DEV_SD1].base,
-                                memmap[K230_DEV_SD1].size);
 
     create_unimplemented_device("hi_sys_cfg", memmap[K230_DEV_HI_SYS_CFG].base,
                                 memmap[K230_DEV_HI_SYS_CFG].size);
