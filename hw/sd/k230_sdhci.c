@@ -41,8 +41,6 @@ static void k230_sdhci_card_timer_cb(void *opaque)
 {
     K230SdhciState *s = K230_SDHCI(opaque);
 
-    trace_k230_sdhci_card_timer(s->sdhci.debug_tag ? s->sdhci.debug_tag : "?");
-
     sdbus_set_inserted(&s->sdhci.sdbus, true);
 
     /*
@@ -57,9 +55,6 @@ static void k230_sdhci_card_timer_cb(void *opaque)
     s->sdhci.clkcon = 0x0007;           /* INT_EN | INT_STABLE | SDCLK_EN */
     s->sdhci.norintstsen |= 0x00c3;   /* CMD_COMPLETE + INSERT + common bits */
     s->sdhci.norintsigen |= 0x00c3;
-
-    trace_k230_sdhci_clkcon_restored(s->sdhci.debug_tag ? s->sdhci.debug_tag : "?",
-                                     s->sdhci.clkcon);
 
     /* Re-arm: SWRST can fire at any time during probe, keep recovering */
     timer_mod(s->card_timer,
@@ -153,10 +148,6 @@ static void k230_sdhci_reset_restore(SDHCIState *sdhci)
     sdhci->norintstsen |= 0x00c3;  /* CMD_COMPLETE | TRANSFER_COMPLETE |
                                       INSERT | common bits */
     sdhci->norintsigen |= 0x00c3;
-
-    trace_k230_sdhci_clkcon_restored(
-        sdhci->debug_tag ? sdhci->debug_tag : "?",
-        sdhci->clkcon);
 }
 
 static void k230_sdhci_realize(DeviceState *dev, Error **errp)
@@ -280,8 +271,6 @@ static void k230_sdhci_reset_exit(Object *obj, ResetType type)
     s->vendor_regs[0x200 / 4] = 0x00000003;  /* CARD_IS_EMMC | VOLT_SWITCH_DONE */
 
     trace_k230_sdhci_reset();
-    trace_k230_sdhci_clkcon_restored(s->sdhci.debug_tag ? s->sdhci.debug_tag : "?",
-                                     s->sdhci.clkcon);
 }
 
 /* ------------------------------------------------------------------ */

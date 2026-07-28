@@ -104,9 +104,6 @@ struct SDHCIState {
      */
     bool wp_inverted;
 
-    /* Debugging: optional instance label for trace output (e.g. "sdhci0") */
-    const char *debug_tag;
-
     /*
      * Optional callback invoked at the end of sdhci_reset(), after all
      * registers have been cleared via memset.  Wrapper models that need

@@ -272,7 +272,6 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     };
 
     for (int i = 0; i < 2; i++) {
-        s->sdhci[i].sdhci.debug_tag = (i == 0) ? "sdhci0" : "sdhci1";
         if (!sysbus_realize(SYS_BUS_DEVICE(&s->sdhci[i]), errp)) {
             return;
         }
