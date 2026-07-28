@@ -282,12 +282,24 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
                                             sdhci_irq[i]));
     }
 
-    /* Attach SD card to SDHCI1 (SD card slot).
-     * SDHCI0 is wired as eMMC on the K230 board; the K230 SDK
-     * driver's SDIO probe loop currently blocks MMC detection in
-     * QEMU.  Leave SDHCI0 without a card until CMU/PHY/GPIO are
-     * modelled so the driver can be debugged at source level.
+    /* Attach eMMC to SDHCI0 (on-board eMMC) and SD card to SDHCI1.
+     *
+     * SDHCI0 connects to the on-board eMMC chip (8-bit, 200 MHz).
+     * SDHCI1 is the removable SD card slot (4-bit, 50 MHz).
+     *
+     * The vendor-region PHY defaults (PWRGOOD=1) allow the K230
+     * sdhci-dwcmshc-kendryte driver to complete its reset/PHY-init
+     * sequence and register both controllers with the MMC core.
      */
+    /* SDHCI0: eMMC (no block backend — probe-only for now) */
+    do {
+        DeviceState *card;
+
+        card = qdev_new(TYPE_EMMC);
+        qdev_realize_and_unref(card, s->sdhci[0].bus, &error_fatal);
+    } while (0);
+
+    /* SDHCI1: SD card (may have -drive if=sd,index=1) */
     do {
         DriveInfo *di = drive_get(IF_SD, 0, 1);
         BlockBackend *blk = di ? blk_by_legacy_dinfo(di) : NULL;

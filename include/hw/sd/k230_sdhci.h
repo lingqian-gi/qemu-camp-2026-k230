@@ -62,6 +62,46 @@ OBJECT_DECLARE_SIMPLE_TYPE(K230SdhciState, K230_SDHCI)
 #define K230_SDHCI_HC_VERSION   0x0004  /* SDHCI v4.0 */
 
 /* ------------------------------------------------------------------ */
+/* DWC MSHC Vendor-Specific Register Offsets (host-relative)          */
+/* ------------------------------------------------------------------ */
+/*
+ * PHY registers (Synopsys DWC MSHC PHY block), relative to host MMIO.
+ * The PHY block is accessed at host_base + DWC_MSHC_PTR_PHY_R + offset.
+ */
+#define DWC_MSHC_PTR_PHY_R         0x100
+
+/* PHY configuration register (32-bit, at host_base + 0x110) */
+#define PHY_CNFG_R_OFF             0x010  /* relative to DWC_MSHC_PTR_PHY_R */
+#define PHY_CNFG_RSTN_DEASSERT     BIT(0)
+#define PHY_CNFG_PHY_PWRGOOD       BIT(1)
+
+/* PHY command/response pad config (16-bit each) */
+#define PHY_CMDPAD_CNFG_R          0x01c
+#define PHY_DATAPAD_CNFG_R         0x01e
+#define PHY_CLKPAD_CNFG_R          0x020
+#define PHY_RSTNPAD_CNFG_R         0x022
+#define PHY_STBPAD_CNFG_R          0x024
+
+/* PHY delay line config */
+#define PHY_COMMDL_CNFG            0x11c
+#define PHY_COMMDL_CNFG_DLSTEP_SEL BIT(0)
+#define PHY_SDCLKDL_CNFG_R         0x11d
+#define PHY_SDCLKDL_DC_R           0x11e
+#define PHY_SMPLDL_CNFG_R          0x120
+#define PHY_ATDL_CNFG_R            0x121
+
+/* eMMC control / auto-tuning / host control */
+#define DWCMSHC_EMMC_CONTROL       0x200
+#define DWCMSHC_EMMC_ATCTRL        0x214
+#define DWCMSHC_AT_STAT            0x215
+#define DWCMSHC_HOST_CTRL3         0x21f
+
+/* Default PHY_CNFG_R value: PWRGOOD=1, RSTN_DEASSERT=1, pad drive=default */
+#define K230_SDHCI_PHY_CNFG_DEFAULT \
+    (PHY_CNFG_PHY_PWRGOOD | PHY_CNFG_RSTN_DEASSERT | \
+     (0x09 << 16) | (0x08 << 20))
+
+/* ------------------------------------------------------------------ */
 /* Device State                                                        */
 /* ------------------------------------------------------------------ */
 

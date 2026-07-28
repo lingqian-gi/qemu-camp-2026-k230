@@ -42,9 +42,21 @@ static void k230_sdhci_card_timer_cb(void *opaque)
     K230SdhciState *s = K230_SDHCI(opaque);
 
     sdbus_set_inserted(&s->sdhci.sdbus, true);
-    timer_mod(s->card_timer,
-              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 100000000ULL); /* 100 ms */
+
+    /*
+     * The K230 driver probe clears norintsen/norintsigen on error
+     * (no card found).  Restore them so that card-detection commands
+     * (CMD0→CMD8→ACMD41→CMD2→CMD3) can signal completion.
+     */
+    s->sdhci.norintstsen |= 0x00c3;   /* CMD_COMPLETE + INSERT + common bits */
+    s->sdhci.norintsigen |= 0x00c3;
+
+    /* single-shot for debugging: don't re-arm */
 }
+
+/* ------------------------------------------------------------------ */
+/* Vendor-Specific MMIO (offsets 0x100–0xFFF)                          */
+/* ------------------------------------------------------------------ */
 
 /* ------------------------------------------------------------------ */
 /* Vendor-Specific MMIO (offsets 0x100–0xFFF)                          */
@@ -70,6 +82,29 @@ static void k230_sdhci_vendor_write(void *opaque, hwaddr addr,
         return;
     }
     s->vendor_regs[addr / 4] = (uint32_t)value;
+
+    /*
+     * The SDK sdhci-dwcmshc-kendryte driver polls PHY_CNFG_R (at
+     * vendor offset 0x440) for the PWRGOOD bit after writing pad-
+     * config values.  Make sure PWRGOOD stays set on read-back
+     * because the QEMU PHY model does not autonomously raise
+     * power-good.
+     */
+    if (addr == 0x440) {
+        s->vendor_regs[addr / 4] |= PHY_CNFG_PHY_PWRGOOD;
+    }
+
+    /*
+     * EMMC_CONTROL (vendor offset 0x200) status bits are read-only
+     * from the driver's perspective.  The driver may write 0 during
+     * init but expects the hardware to report live status on readback.
+     * Preserve the RO bits:
+     *   bit 0: CARD_IS_EMMC
+     *   bit 1: VOLT_SWITCH_DONE
+     */
+    if (addr == 0x200) {
+        s->vendor_regs[addr / 4] |= 0x00000003;
+    }
 }
 
 static const MemoryRegionOps k230_sdhci_vendor_ops = {
@@ -139,12 +174,14 @@ static void k230_sdhci_realize(DeviceState *dev, Error **errp)
 
     /*
      * 6. Periodic card-insert timer — re-inserts the card after
-     *    SWRST-driven ejection.  100 ms period, first fire in 1 ms.
+     *    SWRST-driven ejection.  100 ms period, first fire at 3 s
+     *    so that userspace init + workqueue are ready to handle
+     *    the card-insert interrupt and schedule mmc_rescan.
      */
     s->card_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                  k230_sdhci_card_timer_cb, s);
     timer_mod(s->card_timer,
-              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000000ULL); /* 1 ms */
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 3000000000ULL); /* 3 s */
 }
 
 /* ------------------------------------------------------------------ */
@@ -171,6 +208,20 @@ static void k230_sdhci_reset_exit(Object *obj, ResetType type)
     s->sdhci.prnsts  = K230_SDHCI_PSTATE_DEFAULT;
     s->sdhci.version  = K230_SDHCI_HC_VERSION;
     s->sdhci.maxcurr  = 0;
+
+    /*
+     * Initialise the vendor-specific register area.
+     *
+     * The SDK sdhci-dwcmshc-kendryte driver:
+     *   1. Polls PHY_CNFG_R for PWRGOOD (at vendor offset 0x440)
+     *   2. Reads EMMC_CONTROL (at vendor offset 0x200) for CARD_IS_EMMC
+     *
+     * Set PWRGOOD so the PHY poll succeeds, and CARD_IS_EMMC so
+     * the driver knows this is an eMMC controller.
+     */
+    memset(s->vendor_regs, 0, sizeof(s->vendor_regs));
+    s->vendor_regs[0x440 / 4] = PHY_CNFG_PHY_PWRGOOD;
+    s->vendor_regs[0x200 / 4] = 0x00000003;  /* CARD_IS_EMMC | VOLT_SWITCH_DONE */
 
     trace_k230_sdhci_reset();
 }
