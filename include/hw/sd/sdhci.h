@@ -103,6 +103,26 @@ struct SDHCIState {
      * to be protected. Set wp_inverted to invert the signal.
      */
     bool wp_inverted;
+
+    /* Debugging: optional instance label for trace output (e.g. "sdhci0") */
+    const char *debug_tag;
+
+    /*
+     * Optional callback invoked at the end of sdhci_reset(), after all
+     * registers have been cleared via memset.  Wrapper models that need
+     * to preserve register values across SWRST (e.g. K230 which manages
+     * clock and interrupt-enable outside the standard SDHCI CLKCON and
+     * NORINTSTSEN registers) can use this to restore them synchronously.
+     */
+    void (*reset_restore)(struct SDHCIState *s);
+
+    /*
+     * If true, sdhci_can_issue_command() skips the SDHC_CLOCK_IS_ON check.
+     * Intended for wrappers whose clock is managed outside the standard
+     * SDHCI CLKCON register (e.g. K230 CMU), so the kernel clearing CLKCON
+     * during init does not block command dispatch.
+     */
+    bool clock_always_on;
 };
 typedef struct SDHCIState SDHCIState;
 

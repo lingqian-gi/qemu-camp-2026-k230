@@ -41,17 +41,29 @@ static void k230_sdhci_card_timer_cb(void *opaque)
 {
     K230SdhciState *s = K230_SDHCI(opaque);
 
+    trace_k230_sdhci_card_timer(s->sdhci.debug_tag ? s->sdhci.debug_tag : "?");
+
     sdbus_set_inserted(&s->sdhci.sdbus, true);
 
     /*
      * The K230 driver probe clears norintsen/norintsigen on error
      * (no card found).  Restore them so that card-detection commands
      * (CMD0→CMD8→ACMD41→CMD2→CMD3) can signal completion.
+     *
+     * Also restore clkcon in case SWRST cleared it and the reset_exit
+     * hook was insufficient (e.g. the kernel's vendor driver re-asserts
+     * SWRST later without going through the QOM reset chain).
      */
+    s->sdhci.clkcon = 0x0007;           /* INT_EN | INT_STABLE | SDCLK_EN */
     s->sdhci.norintstsen |= 0x00c3;   /* CMD_COMPLETE + INSERT + common bits */
     s->sdhci.norintsigen |= 0x00c3;
 
-    /* single-shot for debugging: don't re-arm */
+    trace_k230_sdhci_clkcon_restored(s->sdhci.debug_tag ? s->sdhci.debug_tag : "?",
+                                     s->sdhci.clkcon);
+
+    /* Re-arm: SWRST can fire at any time during probe, keep recovering */
+    timer_mod(s->card_timer,
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 500000000ULL); /* 500 ms */
 }
 
 /* ------------------------------------------------------------------ */
@@ -127,6 +139,26 @@ static const MemoryRegionOps k230_sdhci_vendor_ops = {
 /* Realize                                                             */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Callback invoked by the standard SDHCI at the end of every sdhci_reset()
+ * (including SWRST triggered via register write).  The K230 vendor driver
+ * manages clock and interrupt-enable state via CMU + PHY init and does NOT
+ * write the standard SDHCI CLKCON or NORINTSTSEN registers.  However SWRST
+ * zeros them via memset, which makes sdhci_can_issue_command() return false
+ * and blocks all further commands.  Restore them synchronously here.
+ */
+static void k230_sdhci_reset_restore(SDHCIState *sdhci)
+{
+    sdhci->clkcon       = 0x0007;  /* INT_EN | INT_STABLE | SDCLK_EN */
+    sdhci->norintstsen |= 0x00c3;  /* CMD_COMPLETE | TRANSFER_COMPLETE |
+                                      INSERT | common bits */
+    sdhci->norintsigen |= 0x00c3;
+
+    trace_k230_sdhci_clkcon_restored(
+        sdhci->debug_tag ? sdhci->debug_tag : "?",
+        sdhci->clkcon);
+}
+
 static void k230_sdhci_realize(DeviceState *dev, Error **errp)
 {
     K230SdhciState *s = K230_SDHCI(dev);
@@ -134,7 +166,14 @@ static void k230_sdhci_realize(DeviceState *dev, Error **errp)
     SysBusDevice *sbd_sdhci = SYS_BUS_DEVICE(&s->sdhci);
 
     /*
-     * 1. Create container MemoryRegion — this is the SysBus device's
+     * 1. Install the synchronous reset-restore hook so that clkcon and
+     *    interrupt-enable are preserved across both QOM reset and SWRST.
+     */
+    s->sdhci.reset_restore = k230_sdhci_reset_restore;
+    s->sdhci.clock_always_on = true;
+
+    /*
+     * 2. Create container MemoryRegion — this is the SysBus device's
      *    MMIO region, into which we'll merge standard SDHCI registers
      *    and K230 vendor-specific registers.
      */
@@ -210,6 +249,23 @@ static void k230_sdhci_reset_exit(Object *obj, ResetType type)
     s->sdhci.maxcurr  = 0;
 
     /*
+     * The K230 vendor driver manages clocks through CMU + PHY init and
+     * does NOT write the standard SDHCI CLKCON register.  However, SWRST
+     * (called during sdhci_add_host) via memset zeros clkcon, which makes
+     * sdhci_can_issue_command() return false (because SDHC_CLOCK_IS_ON
+     * checks for INT_EN | INT_STABLE | SDCLK_EN).  Restore clkcon so
+     * commands can be dispatched.
+     *
+     * Similarly, SWRST zeros norintstsen/norintsigen; the kernel driver
+     * may not re-enable them if it gets an error response before the
+     * next SWRST cycle.  Restore them to known-good values so that
+     * command-complete and card-insert interrupts are signalled.
+     */
+    s->sdhci.clkcon       = 0x0007;  /* INT_EN | INT_STABLE | SDCLK_EN */
+    s->sdhci.norintstsen |= 0x00c3;  /* CMD_COMPLETE | TRANSFER_COMPLETE | INSERT | common */
+    s->sdhci.norintsigen |= 0x00c3;
+
+    /*
      * Initialise the vendor-specific register area.
      *
      * The SDK sdhci-dwcmshc-kendryte driver:
@@ -224,6 +280,8 @@ static void k230_sdhci_reset_exit(Object *obj, ResetType type)
     s->vendor_regs[0x200 / 4] = 0x00000003;  /* CARD_IS_EMMC | VOLT_SWITCH_DONE */
 
     trace_k230_sdhci_reset();
+    trace_k230_sdhci_clkcon_restored(s->sdhci.debug_tag ? s->sdhci.debug_tag : "?",
+                                     s->sdhci.clkcon);
 }
 
 /* ------------------------------------------------------------------ */

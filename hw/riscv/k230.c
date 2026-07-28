@@ -272,6 +272,7 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     };
 
     for (int i = 0; i < 2; i++) {
+        s->sdhci[i].sdhci.debug_tag = (i == 0) ? "sdhci0" : "sdhci1";
         if (!sysbus_realize(SYS_BUS_DEVICE(&s->sdhci[i]), errp)) {
             return;
         }
@@ -291,11 +292,14 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
      * sdhci-dwcmshc-kendryte driver to complete its reset/PHY-init
      * sequence and register both controllers with the MMC core.
      */
-    /* SDHCI0: eMMC (no block backend — probe-only for now) */
+    /* SDHCI0: eMMC (may have -drive if=sd,index=0) */
     do {
+        DriveInfo *di = drive_get(IF_SD, 0, 0);
+        BlockBackend *blk = di ? blk_by_legacy_dinfo(di) : NULL;
         DeviceState *card;
 
         card = qdev_new(TYPE_EMMC);
+        qdev_prop_set_drive_err(card, "drive", blk, &error_fatal);
         qdev_realize_and_unref(card, s->sdhci[0].bus, &error_fatal);
     } while (0);
 

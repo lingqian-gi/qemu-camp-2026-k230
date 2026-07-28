@@ -80,3 +80,14 @@ aspeed_sdhci_write(uint64_t addr, uint32_t size, uint64_t data) "@0x%" PRIx64 " 
 k230_sdhci_reset(void) ""
 k230_sdhci_read(uint64_t addr, uint32_t data) "addr=0x%" PRIx64 " data=0x%" PRIx32
 k230_sdhci_write(uint64_t addr, uint64_t data) "addr=0x%" PRIx64 " data=0x%" PRIx64
+k230_sdhci_card_timer(const char *tag) "%s card timer fired"
+k230_sdhci_clkcon_restored(const char *tag, uint16_t clkcon) "%s post_reset clkcon=0x%04x"
+
+# sdhci.c — instance-aware debugging traces (with tag)
+sdhci_debug_reset(const char *tag) "%s reset"
+sdhci_debug_send_command(const char *tag, uint8_t cmd, uint32_t arg) "%s CMD%02u ARG[0x%08x]"
+sdhci_debug_can_issue(const char *tag, bool clock_on, bool dat_inhibit, bool result) "%s can_issue: clk=%d dat_inhibit=%d -> %d"
+sdhci_debug_cmdreg(const char *tag, uint16_t cmdreg, bool issued) "%s CMDREG=0x%04x issued=%d"
+sdhci_debug_clkcon(const char *tag, uint16_t clkcon, bool clock_on) "%s CLKCON=0x%04x clock_on=%d"
+sdhci_debug_norintsts(const char *tag, uint16_t val) "%s NORINTSTS=0x%04x"
+sdhci_debug_norintstsen(const char *tag, uint16_t val) "%s NORINTSTSEN=0x%04x"

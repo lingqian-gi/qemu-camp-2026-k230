@@ -312,6 +312,14 @@ static void sdhci_reset(SDHCIState *s)
         s->norintstsen = 0x013f;
         s->errintstsen = 0x117f;
     }
+
+    if (s->reset_restore) {
+        s->reset_restore(s);
+    }
+
+    trace_sdhci_debug_reset(s->debug_tag ? s->debug_tag : "?");
+    trace_sdhci_debug_clkcon(s->debug_tag ? s->debug_tag : "?",
+                             s->clkcon, SDHC_CLOCK_IS_ON(s->clkcon));
 }
 
 static void sdhci_poweron_reset(DeviceState *dev)
@@ -347,6 +355,8 @@ static void sdhci_send_command(SDHCIState *s)
     request.arg = s->argument;
 
     trace_sdhci_send_command(request.cmd, request.arg);
+    trace_sdhci_debug_send_command(s->debug_tag ? s->debug_tag : "?",
+                                   request.cmd, request.arg);
     rlen = sdbus_do_command(&s->sdbus, &request, response, sizeof(response));
 
     if (s->cmdreg & SDHC_CMD_RESPONSE) {
@@ -994,15 +1004,22 @@ static void sdhci_data_transfer(void *opaque)
 
 static bool sdhci_can_issue_command(SDHCIState *s)
 {
-    if (!SDHC_CLOCK_IS_ON(s->clkcon) ||
-        (((s->prnsts & SDHC_DATA_INHIBIT) || s->stopped_state) &&
-        ((s->cmdreg & SDHC_CMD_DATA_PRESENT) ||
-        ((s->cmdreg & SDHC_CMD_RESPONSE) == SDHC_CMD_RSP_WITH_BUSY &&
-        !(SDHC_COMMAND_TYPE(s->cmdreg) == SDHC_CMD_ABORT))))) {
-        return false;
+    bool clock_on = s->clock_always_on || SDHC_CLOCK_IS_ON(s->clkcon);
+    bool dat_inhibit = (s->prnsts & SDHC_DATA_INHIBIT) || s->stopped_state;
+    bool cmd_has_data = (s->cmdreg & SDHC_CMD_DATA_PRESENT);
+    bool cmd_is_busy = ((s->cmdreg & SDHC_CMD_RESPONSE) == SDHC_CMD_RSP_WITH_BUSY &&
+                        !(SDHC_COMMAND_TYPE(s->cmdreg) == SDHC_CMD_ABORT));
+    bool result;
+
+    if (!clock_on || (dat_inhibit && (cmd_has_data || cmd_is_busy))) {
+        result = false;
+    } else {
+        result = true;
     }
 
-    return true;
+    trace_sdhci_debug_can_issue(s->debug_tag ? s->debug_tag : "?",
+                                clock_on, dat_inhibit, result);
+    return result;
 }
 
 /*
@@ -1075,6 +1092,8 @@ static uint64_t sdhci_read(void *opaque, hwaddr offset, unsigned size)
         break;
     case SDHC_NORINTSTS:
         ret = s->norintsts | (s->errintsts << 16);
+        trace_sdhci_debug_norintsts(s->debug_tag ? s->debug_tag : "?",
+                                    s->norintsts);
         break;
     case SDHC_NORINTSTSEN:
         ret = s->norintstsen | (s->errintstsen << 16);
@@ -1250,9 +1269,13 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
 
         /* Writing to the upper byte of CMDREG triggers SD command generation */
         if ((mask & 0xFF000000) || !sdhci_can_issue_command(s)) {
+            trace_sdhci_debug_cmdreg(s->debug_tag ? s->debug_tag : "?",
+                                     s->cmdreg, false);
             break;
         }
 
+        trace_sdhci_debug_cmdreg(s->debug_tag ? s->debug_tag : "?",
+                                 s->cmdreg, true);
         sdhci_send_command(s);
         break;
     case  SDHC_BDATA:
@@ -1280,9 +1303,15 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
         MASKED_WRITE(s->timeoutcon, mask >> 16, value >> 16);
         if (s->clkcon & SDHC_CLOCK_INT_EN) {
             s->clkcon |= SDHC_CLOCK_INT_STABLE;
-        } else {
+        } else if (!s->clock_always_on) {
             s->clkcon &= ~SDHC_CLOCK_INT_STABLE;
         }
+        /* K230: CMU-managed clock; force STABLE so SDCLK_EN remains valid */
+        if (s->clock_always_on) {
+            s->clkcon |= SDHC_CLOCK_INT_STABLE | SDHC_CLOCK_SDCLK_EN;
+        }
+        trace_sdhci_debug_clkcon(s->debug_tag ? s->debug_tag : "?",
+                                 s->clkcon, SDHC_CLOCK_IS_ON(s->clkcon));
         break;
     case SDHC_NORINTSTS:
         if (s->norintstsen & SDHC_NISEN_CARDINT) {
@@ -1296,6 +1325,8 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
             s->norintsts &= ~SDHC_NIS_ERR;
         }
         sdhci_update_irq(s);
+        trace_sdhci_debug_norintsts(s->debug_tag ? s->debug_tag : "?",
+                                    s->norintsts);
         break;
     case SDHC_NORINTSTSEN:
         MASKED_WRITE(s->norintstsen, mask, value);
@@ -1317,6 +1348,8 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
             s->pending_insert_state = false;
         }
         sdhci_update_irq(s);
+        trace_sdhci_debug_norintstsen(s->debug_tag ? s->debug_tag : "?",
+                                      s->norintstsen);
         break;
     case SDHC_NORINTSIGEN:
         MASKED_WRITE(s->norintsigen, mask, value);
