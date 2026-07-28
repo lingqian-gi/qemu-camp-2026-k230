@@ -403,8 +403,17 @@ static void sdhci_send_command(SDHCIState *s)
 
 static void sdhci_end_transfer(SDHCIState *s)
 {
-    /* Automatically send CMD12 to stop transfer if AutoCMD12 enabled */
-    if ((s->trnmod & SDHC_TRNS_ACMD12) != 0) {
+    trace_sdhci_debug_end_transfer(s->debug_tag ? s->debug_tag : "?",
+                                   s->prnsts);
+
+    /* Automatically send CMD12 to stop transfer if AutoCMD12 enabled.
+     * For write transfers (CMD24/CMD25), also send CMD12 unconditionally
+     * so the card model transitions from receivingdata_state back to
+     * transfer_state.  The eMMC multi-block write path keeps the card
+     * in receivingdata_state when multi_blk_cnt is 0 (unlimited);
+     * without CMD12 the kernel driver sees "Card stuck in wrong state". */
+    if ((s->trnmod & SDHC_TRNS_ACMD12) != 0 ||
+            (!(s->trnmod & SDHC_TRNS_READ) && s->blkcnt == 0)) {
         SDRequest request;
         uint8_t response[16];
 
@@ -710,6 +719,9 @@ static void sdhci_sdma_transfer_single_block(SDHCIState *s)
         sdbus_write_data(&s->sdbus, s->fifo_buffer, datacnt);
     }
     s->blkcnt--;
+
+    trace_sdhci_debug_write_block(s->debug_tag ? s->debug_tag : "?",
+                                  s->blkcnt, s->prnsts);
 
     if (s->norintstsen & SDHC_NISEN_DMA) {
         s->norintsts |= SDHC_NIS_DMA;

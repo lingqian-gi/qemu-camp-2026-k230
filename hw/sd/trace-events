@@ -91,3 +91,6 @@ sdhci_debug_cmdreg(const char *tag, uint16_t cmdreg, bool issued) "%s CMDREG=0x%
 sdhci_debug_clkcon(const char *tag, uint16_t clkcon, bool clock_on) "%s CLKCON=0x%04x clock_on=%d"
 sdhci_debug_norintsts(const char *tag, uint16_t val) "%s NORINTSTS=0x%04x"
 sdhci_debug_norintstsen(const char *tag, uint16_t val) "%s NORINTSTSEN=0x%04x"
+sdhci_debug_write_block(const char *tag, uint32_t blkcnt, uint32_t prnsts) "%s write_block blkcnt=%u prnsts=0x%06x"
+sdhci_debug_end_transfer(const char *tag, uint32_t prnsts_before) "%s end_transfer prnsts_before=0x%06x"
+sdhci_debug_prnsts(const char *tag, uint32_t prnsts) "%s PRNSTS=0x%06x"
