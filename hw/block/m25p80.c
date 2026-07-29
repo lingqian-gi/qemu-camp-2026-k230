@@ -822,6 +822,9 @@ static void complete_collecting_data(Flash *s)
             if (s->len > 1) {
                 s->quad_enable = !!(s->data[1] & 0x02);
             }
+            trace_m25p80_wrsr_data(s, s->cmd_in_progress,
+                                   s->data[0], s->data[1], s->len);
+            trace_m25p80_quad_enable(s, s->quad_enable);
             break;
         default:
             break;
@@ -834,6 +837,7 @@ static void complete_collecting_data(Flash *s)
         switch (get_man(s)) {
         case MAN_WINBOND:
             s->quad_enable = !!(s->data[0] & 0x02);
+            trace_m25p80_quad_enable(s, s->quad_enable);
             break;
         default:
             break;
@@ -1074,8 +1078,23 @@ static uint8_t spansion_extract_cfg_dummy_bytes(Flash *s, uint8_t bus_width)
     return dummy_bits / 8;
 }
 
+/* Get the SSI bus I/O mode for multi-line dummy cycle calculation.
+ * Falls back to Standard SPI (1 line) if the bus is not available.
+ */
+static uint8_t m25p80_current_io_mode(Flash *s)
+{
+    DeviceState *dev = DEVICE(s);
+    BusState *bus = qdev_get_parent_bus(dev);
+    if (bus) {
+        return ssi_get_io_mode(SSI_BUS(bus));
+    }
+    return 1;
+}
+
 static void decode_fast_read_cmd(Flash *s)
 {
+    uint8_t io_mode = m25p80_current_io_mode(s);
+
     s->needed_bytes = get_addr_length(s);
     switch (get_man(s)) {
     /* Dummy cycles - modeled with bytes writes instead of bits */
@@ -1089,10 +1108,10 @@ static void decode_fast_read_cmd(Flash *s)
         s->needed_bytes += numonyx_extract_cfg_dummy_bytes(s);
         break;
     case MAN_MACRONIX:
-        s->needed_bytes += macronix_extract_cfg_dummy_bytes(s, 1);
+        s->needed_bytes += macronix_extract_cfg_dummy_bytes(s, io_mode);
         break;
     case MAN_SPANSION:
-        s->needed_bytes += spansion_extract_cfg_dummy_bytes(s, 1);
+        s->needed_bytes += spansion_extract_cfg_dummy_bytes(s, io_mode);
         break;
     case MAN_ISSI:
         /*
@@ -1544,6 +1563,7 @@ static void decode_new_cmd(Flash *s, uint32_t value)
             s->pos = 0;
             s->len = 1;
             s->state = STATE_READING_DATA;
+            trace_m25p80_rdcr_eqio(s, value, s->data[0], s->quad_enable);
             break;
         default:
             break;

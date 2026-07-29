@@ -103,6 +103,9 @@ m25p80_read_data(void *s, uint32_t pos, uint8_t v) "[%p] Read data 0x%"PRIx32"=0
 m25p80_read_sfdp(void *s, uint32_t addr, uint8_t v) "[%p] Read SFDP 0x%"PRIx32"=0x%"PRIx8
 m25p80_binding(void *s) "[%p] Binding to IF_MTD drive"
 m25p80_binding_no_bdrv(void *s) "[%p] No BDRV - binding to RAM"
+m25p80_quad_enable(void *s, bool enabled) "[%p] quad_enable=%d"
+m25p80_wrsr_data(void *s, uint32_t cmd_in_progress, uint8_t data0, uint8_t data1, uint8_t len) "[%p] WRSR cmd=0x%"PRIx32" data[0]=0x%"PRIx8" data[1]=0x%"PRIx8" len=%u"
+m25p80_rdcr_eqio(void *s, uint32_t cmd, uint8_t resp, bool qe) "[%p] RDCR_EQIO cmd=0x%"PRIx32" resp=0x%"PRIx8" qe=%d"
 
 # swim.c
 swim_ismctrl_read(int reg, const char *name, unsigned size, uint64_t value) "reg=%d [%s] size=%u value=0x%"PRIx64

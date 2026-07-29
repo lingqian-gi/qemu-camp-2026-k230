@@ -447,8 +447,115 @@ static void test_sr_rfne_lifecycle(void)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Test registration                                                  */
+/*  14. CTRLR0 FRF (Frame Format) field — Standard / Dual / Quad mode  */
 /* ------------------------------------------------------------------ */
+
+static void test_ctrlr0_frf_mode(void)
+{
+    QTestState *qts = qtest_init("-machine k230");
+    uint32_t ctrlr0;
+
+    /* Reset: FRF should be STD (0x0) */
+    ctrlr0 = qtest_readl(qts, QSPI0_BASE + K230_SPI_CTRLR0);
+    g_assert_cmphex(ctrlr0 & K230_SPI_CTRLR0_SPI_FRF_MASK, ==, 0);
+
+    /* Write FRF=DUAL (0x1 << 22), read back */
+    qtest_writel(qts, QSPI0_BASE + K230_SPI_CTRLR0,
+                 K230_SPI_CTRLR0_SPI_FRF_DUAL << K230_SPI_CTRLR0_SPI_FRF_SHIFT);
+    ctrlr0 = qtest_readl(qts, QSPI0_BASE + K230_SPI_CTRLR0);
+    g_assert_cmphex(ctrlr0 & K230_SPI_CTRLR0_SPI_FRF_MASK, ==,
+                    K230_SPI_CTRLR0_SPI_FRF_DUAL << K230_SPI_CTRLR0_SPI_FRF_SHIFT);
+
+    /* Write FRF=QUAD (0x2 << 22), read back */
+    qtest_writel(qts, QSPI0_BASE + K230_SPI_CTRLR0,
+                 K230_SPI_CTRLR0_SPI_FRF_QUAD << K230_SPI_CTRLR0_SPI_FRF_SHIFT);
+    ctrlr0 = qtest_readl(qts, QSPI0_BASE + K230_SPI_CTRLR0);
+    g_assert_cmphex(ctrlr0 & K230_SPI_CTRLR0_SPI_FRF_MASK, ==,
+                    K230_SPI_CTRLR0_SPI_FRF_QUAD << K230_SPI_CTRLR0_SPI_FRF_SHIFT);
+
+    qtest_quit(qts);
+}
+
+/* ------------------------------------------------------------------ */
+/*  15. FRF mode cycling: STD → DUAL → QUAD → STD → reset             */
+/* ------------------------------------------------------------------ */
+
+static void test_frf_mode_switch(void)
+{
+    QTestState *qts = qtest_init("-machine k230");
+    uint32_t ctrlr0;
+
+    /* Phase 1: FRF=STD (reset value) */
+    ctrlr0 = qtest_readl(qts, QSPI0_BASE + K230_SPI_CTRLR0);
+    g_assert_cmphex(ctrlr0 & K230_SPI_CTRLR0_SPI_FRF_MASK, ==, 0);
+
+    /* Phase 2: Switch to DUAL */
+    qtest_writel(qts, QSPI0_BASE + K230_SPI_CTRLR0,
+                 K230_SPI_CTRLR0_SPI_FRF_DUAL << K230_SPI_CTRLR0_SPI_FRF_SHIFT);
+    ctrlr0 = qtest_readl(qts, QSPI0_BASE + K230_SPI_CTRLR0);
+    g_assert_cmphex(ctrlr0 & K230_SPI_CTRLR0_SPI_FRF_MASK, ==,
+                    K230_SPI_CTRLR0_SPI_FRF_DUAL << K230_SPI_CTRLR0_SPI_FRF_SHIFT);
+
+    /* Phase 3: Switch to QUAD */
+    qtest_writel(qts, QSPI0_BASE + K230_SPI_CTRLR0,
+                 K230_SPI_CTRLR0_SPI_FRF_QUAD << K230_SPI_CTRLR0_SPI_FRF_SHIFT);
+    ctrlr0 = qtest_readl(qts, QSPI0_BASE + K230_SPI_CTRLR0);
+    g_assert_cmphex(ctrlr0 & K230_SPI_CTRLR0_SPI_FRF_MASK, ==,
+                    K230_SPI_CTRLR0_SPI_FRF_QUAD << K230_SPI_CTRLR0_SPI_FRF_SHIFT);
+
+    /* Phase 4: Switch back to STD */
+    qtest_writel(qts, QSPI0_BASE + K230_SPI_CTRLR0,
+                 K230_SPI_CTRLR0_SPI_FRF_STD << K230_SPI_CTRLR0_SPI_FRF_SHIFT);
+    ctrlr0 = qtest_readl(qts, QSPI0_BASE + K230_SPI_CTRLR0);
+    g_assert_cmphex(ctrlr0 & K230_SPI_CTRLR0_SPI_FRF_MASK, ==, 0);
+
+    qtest_quit(qts);
+}
+
+/* ------------------------------------------------------------------ */
+/*  16. DR PIO transfer in Quad mode — FRF=QUAD doesn't break data     */
+/* ------------------------------------------------------------------ */
+
+static void test_quad_mode_dr_transfer(void)
+{
+    QTestState *qts = qtest_init("-machine k230");
+    uint32_t sr, dr;
+
+    /* Set FRF=QUAD in CTRLR0 */
+    qtest_writel(qts, SPI_BASE + K230_SPI_CTRLR0,
+                 K230_SPI_CTRLR0_SPI_FRF_QUAD << K230_SPI_CTRLR0_SPI_FRF_SHIFT);
+    g_assert_cmphex(qtest_readl(qts, SPI_BASE + K230_SPI_CTRLR0)
+                    & K230_SPI_CTRLR0_SPI_FRF_MASK, ==,
+                    K230_SPI_CTRLR0_SPI_FRF_QUAD << K230_SPI_CTRLR0_SPI_FRF_SHIFT);
+
+    /* Enable SSI */
+    qtest_writel(qts, SPI_BASE + K230_SPI_SSIENR, 1);
+
+    /* Send JEDEC_READ command (0x9F) — same command as single-line mode */
+    qtest_writel(qts, SPI_BASE + K230_SPI_DR_BASE, 0x9F);
+
+    /* SR should show RFNE=1 */
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, K230_SPI_SR_RFNE);
+
+    /* Read DR — cmd response is 0x00 */
+    dr = qtest_readl(qts, SPI_BASE + K230_SPI_DR_BASE);
+    g_assert_cmphex(dr, ==, 0);
+
+    /* SR goes back to idle */
+    sr = qtest_readl(qts, SPI_BASE + K230_SPI_SR);
+    g_assert_cmphex(sr & K230_SPI_SR_RFNE, ==, 0);
+
+    /* Dummy byte → JEDEC ID byte 0 (0xEF = Winbond) */
+    qtest_writel(qts, SPI_BASE + K230_SPI_DR_BASE, 0x00);
+    dr = qtest_readl(qts, SPI_BASE + K230_SPI_DR_BASE);
+    g_assert_cmphex(dr, ==, 0xef);
+
+    /* Disable SSI */
+    qtest_writel(qts, SPI_BASE + K230_SPI_SSIENR, 0);
+
+    qtest_quit(qts);
+}
 
 int main(int argc, char *argv[])
 {
@@ -469,6 +576,9 @@ int main(int argc, char *argv[])
     qtest_add_func("/k230-spi/dr_transfer_without_ssienr",
                                                        test_dr_transfer_without_ssienr);
     qtest_add_func("/k230-spi/sr_rfne_lifecycle",       test_sr_rfne_lifecycle);
+    qtest_add_func("/k230-spi/ctrlr0_frf_mode",          test_ctrlr0_frf_mode);
+    qtest_add_func("/k230-spi/frf_mode_switch",          test_frf_mode_switch);
+    qtest_add_func("/k230-spi/quad_mode_dr_transfer",    test_quad_mode_dr_transfer);
 
     return g_test_run();
 }

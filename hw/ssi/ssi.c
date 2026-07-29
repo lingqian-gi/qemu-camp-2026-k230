@@ -22,10 +22,8 @@
 
 struct SSIBus {
     BusState parent_obj;
+    uint8_t io_mode;       /* Current I/O mode (SSI_MODE_*), default STD */
 };
-
-#define TYPE_SSI_BUS "SSI"
-OBJECT_DECLARE_SIMPLE_TYPE(SSIBus, SSI_BUS)
 
 DeviceState *ssi_get_cs(SSIBus *bus, uint8_t cs_index)
 {
@@ -150,6 +148,7 @@ SSIBus *ssi_create_bus(DeviceState *parent, const char *name)
 {
     BusState *bus;
     bus = qbus_new(TYPE_SSI_BUS, parent, name);
+    SSI_BUS(bus)->io_mode = SSI_MODE_STD;
     return SSI_BUS(bus);
 }
 
@@ -165,6 +164,16 @@ uint32_t ssi_transfer(SSIBus *bus, uint32_t val)
     }
 
     return r;
+}
+
+void ssi_set_io_mode(SSIBus *bus, uint8_t mode)
+{
+    bus->io_mode = mode;
+}
+
+uint8_t ssi_get_io_mode(SSIBus *bus)
+{
+    return bus->io_mode;
 }
 
 const VMStateDescription vmstate_ssi_peripheral = {

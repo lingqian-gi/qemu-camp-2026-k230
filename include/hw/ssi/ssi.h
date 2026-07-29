@@ -22,6 +22,9 @@ typedef enum SSICSMode SSICSMode;
 OBJECT_DECLARE_TYPE(SSIPeripheral, SSIPeripheralClass,
                     SSI_PERIPHERAL)
 
+#define TYPE_SSI_BUS "SSI"
+OBJECT_DECLARE_SIMPLE_TYPE(SSIBus, SSI_BUS)
+
 #define SSI_GPIO_CS "ssi-gpio-cs"
 
 enum SSICSMode {
@@ -29,6 +32,16 @@ enum SSICSMode {
     SSI_CS_LOW,
     SSI_CS_HIGH,
 };
+
+/* I/O mode: number of data lines for multi-line SPI transfers.
+ * The controller sets this via ssi_set_io_mode() based on the
+ * frame format field (e.g., CTRLR0.FRF on DW SSI).  Peripherals
+ * read it via ssi_get_io_mode() to adapt their data phase.
+ */
+#define SSI_MODE_STD   1   /* Standard SPI: 1 data line */
+#define SSI_MODE_DUAL  2   /* Dual SPI: 2 data lines */
+#define SSI_MODE_QUAD  4   /* Quad SPI: 4 data lines */
+#define SSI_MODE_OCTAL 8   /* Octal SPI: 8 data lines */
 
 /* Peripherals.  */
 struct SSIPeripheralClass {
@@ -125,6 +138,24 @@ SSIBus *ssi_create_bus(DeviceState *parent, const char *name);
  * Return: word value received
  */
 uint32_t ssi_transfer(SSIBus *bus, uint32_t val);
+
+/**
+ * ssi_set_io_mode: set the I/O mode (line count) for multi-line SPI
+ * @bus: SSI bus
+ * @mode: one of SSI_MODE_STD / DUAL / QUAD / OCTAL
+ *
+ * Called by the SPI controller when the frame format changes (e.g.,
+ * CTRLR0.FRF field in DW SSI).  The mode is propagated to peripherals
+ * via ssi_get_io_mode().
+ */
+void ssi_set_io_mode(SSIBus *bus, uint8_t mode);
+
+/**
+ * ssi_get_io_mode: get the current I/O mode (line count)
+ * @bus: SSI bus
+ * @return: current I/O mode (SSI_MODE_*)
+ */
+uint8_t ssi_get_io_mode(SSIBus *bus);
 
 DeviceState *ssi_get_cs(SSIBus *bus, uint8_t cs_index);
 

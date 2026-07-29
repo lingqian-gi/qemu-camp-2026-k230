@@ -25,6 +25,78 @@
 #include "trace.h"
 
 /* ------------------------------------------------------------------ */
+/*  NDF burst deferred execution                                       */
+/* ------------------------------------------------------------------ */
+
+/* Execute a deferred NDF burst using TX FIFO data.
+ *
+ * For read transfers the kernel writes only the command byte (1 byte)
+ * and relies on the DW SSI to auto-generate the remaining NDF frames
+ * with TX=0.  For write transfers (e.g. WRSR) the kernel writes every
+ * byte explicitly.  By deferring execution until the first DR read or
+ * SSIENR disable, we collect all TX bytes into the FIFO first and then
+ * use them as the TX values for each frame — falling back to 0 for
+ * frames that the kernel didn't supply (read transfers).
+ */
+static void k230_spi_execute_burst(K230SpiState *s)
+{
+    uint32_t ndf = s->ctrlr1 & 0xffff;
+    uint32_t frames = ndf + 1;
+
+    s->ndf_pending = false;
+    s->burst_active = true;
+
+    for (uint32_t f = 0; f < frames; f++) {
+        uint32_t txw = (f < s->tx_fifo_count) ? s->tx_fifo[f] : 0;
+        uint32_t rx = ssi_transfer(s->spi_bus, txw);
+
+        /* Frame 0's response is consumed by the DW SSI hardware and
+         * must not reach the driver's rx buffer. */
+        if (f > 0 && s->rx_fifo_count < 256) {
+            s->rx_fifo[s->rx_fifo_count++] = rx;
+        }
+    }
+    /* Pad: keep NDF+1 entries so dw_reader never stalls */
+    if (s->rx_fifo_count < 256) {
+        s->rx_fifo[s->rx_fifo_count++] = 0;
+    }
+
+    /* ISR / RISR always reflect raw status; the IRQ line is asserted
+     * only when the corresponding IMR bit is set (DW SSI 3.2.10). */
+    s->isr |= K230_SPI_ISR_RXFI;
+    s->risr = s->isr;
+    if (s->imr & K230_SPI_ISR_RXFI) {
+        qemu_set_irq(s->irq, 1);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*  I/O mode helpers                                                   */
+/* ------------------------------------------------------------------ */
+
+/* Map CTRLR0.FRF (frame format, bits 23:22) to number of I/O lines.
+ *
+ *   FRF_STD  (0x0) →  1 line  (Standard SPI)
+ *   FRF_DUAL (0x1) →  2 lines (Dual SPI)
+ *   FRF_QUAD (0x2) →  4 lines (Quad SPI)
+ *   FRF_OCTAL(0x3) →  8 lines (Octal SPI)
+ *
+ * The return value matches one of the SSI_MODE_* constants so the
+ * caller can pass it directly to ssi_set_io_mode().
+ */
+static uint8_t k230_spi_frf_to_io_mode(K230SpiState *s)
+{
+    uint32_t frf = (s->ctrlr0 & K230_SPI_CTRLR0_SPI_FRF_MASK)
+                   >> K230_SPI_CTRLR0_SPI_FRF_SHIFT;
+    switch (frf) {
+    case K230_SPI_CTRLR0_SPI_FRF_DUAL:  return SSI_MODE_DUAL;
+    case K230_SPI_CTRLR0_SPI_FRF_QUAD:  return SSI_MODE_QUAD;
+    case K230_SPI_CTRLR0_SPI_FRF_OCTAL: return SSI_MODE_OCTAL;
+    default:                             return SSI_MODE_STD;
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Reset                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -79,6 +151,9 @@ static void k230_spi_reset_hold(Object *obj, ResetType type)
     s->burst_active  = false;
 
     qemu_set_irq(s->irq, 0);
+
+    /* Reset SSI bus I/O mode to Standard SPI (1-wire) */
+    ssi_set_io_mode(s->spi_bus, SSI_MODE_STD);
 }
 
 /* ------------------------------------------------------------------ */
@@ -120,9 +195,20 @@ static uint64_t k230_spi_read(void *opaque, hwaddr addr, unsigned int size)
         value = s->tx_fifo_count;
         break;
     case K230_SPI_RXFLR:
+        if (s->ndf_pending && s->tx_fifo_count > 0) {
+            k230_spi_execute_burst(s);
+        }
         value = s->rx_fifo_count;
         break;
     case K230_SPI_SR:
+        /* Execute deferred NDF burst if there are bytes waiting in
+         * the TX FIFO — the kernel has written at least the command
+         * byte and is now polling SR to decide whether RX data is
+         * available.  An empty TX FIFO means no transfer is in
+         * progress (e.g. probe just enabled SSIENR). */
+        if (s->ndf_pending && s->tx_fifo_count > 0) {
+            k230_spi_execute_burst(s);
+        }
         if (s->ssienr & K230_SPI_SSIENR_EN) {
             /* SSI enabled: dynamic status, RFNE reflects rx_fifo_count */
             uint32_t dynamic = K230_SPI_SR_IDLE;  /* 0x06 = TFE | TFNF */
@@ -204,6 +290,11 @@ static uint64_t k230_spi_read(void *opaque, hwaddr addr, unsigned int size)
     /* ---- Data Registers DR0 – DR35 (0x60 – 0xec) ---- */
     default:
         if (addr >= K230_SPI_DR_BASE && addr < K230_SPI_RX_SAMPLE_DELAY) {
+            /* Execute deferred NDF burst if the kernel has finished
+             * writing TX bytes and is now reading RX data. */
+            if (s->ndf_pending) {
+                k230_spi_execute_burst(s);
+            }
             if (s->rx_fifo_count > 0) {
                 value = s->rx_fifo[0];
                 memmove(s->rx_fifo, s->rx_fifo + 1,
@@ -242,6 +333,7 @@ static void k230_spi_write(void *opaque, hwaddr addr,
     /* ---- DW SSI Standard Registers ---- */
     case K230_SPI_CTRLR0:
         s->ctrlr0 = value;
+        ssi_set_io_mode(s->spi_bus, k230_spi_frf_to_io_mode(s));
         break;
     case K230_SPI_CTRLR1:
         s->ctrlr1 = value & 0x0000ffff;   /* NDF[15:0] */
@@ -265,8 +357,13 @@ static void k230_spi_write(void *opaque, hwaddr addr,
         }
         /* Disable: de-assert CS.  The SSI peripheral's set_cs
          * callback resets the flash state machine to IDLE so
-         * the next command word is decoded correctly. */
+         * the next command word is decoded correctly.
+         * Execute a deferred NDF burst if the transfer never
+         * did a DR read (write-only transfers like WRSR). */
         if (!(value & K230_SPI_SSIENR_EN) && (s->ssienr & K230_SPI_SSIENR_EN)) {
+            if (s->ndf_pending) {
+                k230_spi_execute_burst(s);
+            }
             {
                 BusState *bs = BUS(s->spi_bus);
                 BusChild *kid;
@@ -376,41 +473,27 @@ static void k230_spi_write(void *opaque, hwaddr addr,
             if (s->ssienr & K230_SPI_SSIENR_EN) {
                 uint32_t ndf = s->ctrlr1 & 0xffff;
 
-                /* After the NDF burst has started, the kernel
-                 * may write the remaining data bytes to DR.
-                 * These are redundant — the burst already sent
-                 * them via auto-generated frames.  Silently
-                 * consume them to avoid corrupting the flash
-                 * state machine with spurious commands. */
+                /* After the NDF burst has started, further DR writes
+                 * from the kernel are redundant for read transfers
+                 * (the burst already filled auto-generated 0x00 frames)
+                 * but necessary for write transfers (WRSR etc.).
+                 * Once burst_active is set, the full transfer has been
+                 * dispatched to the flash — suppress further writes. */
                 if (s->burst_active) {
                     break;
                 }
 
                 if (s->ndf_pending && ndf > 0) {
-                    /* Multi-frame NDF burst: the first DR write
-                     * after SSIENR enable triggers NDF+1 frames.
-                     * Frame 0 carries the SPI command opcode
-                     * whose response is consumed by the DW SSI
-                     * hardware and must not reach the driver's
-                     * rx buffer.  Push only frames [1..ndf],
-                     * then pad with one zero to maintain the
-                     * full NDF+1 count so the driver's DR
-                     * read loop always completes. */
-                    uint32_t frames = ndf + 1;
-                    s->ndf_pending = false;
-                    s->burst_active = true;
-
-                    for (uint32_t f = 0; f < frames; f++) {
-                        uint32_t txw = (f == 0) ? (uint32_t)value : 0;
-                        uint32_t rx = ssi_transfer(s->spi_bus, txw);
-                        if (f > 0 && s->rx_fifo_count < 256) {
-                            s->rx_fifo[s->rx_fifo_count++] = rx;
-                        }
+                    /* Deferred NDF burst: buffer TX bytes to the FIFO.
+                     * The burst is actually executed on the first DR
+                     * read (read transfer) or on SSIENR disable
+                     * (write transfer).  This gives us time to collect
+                     * all bytes the kernel writes — for write commands
+                     * like WRSR the kernel writes every byte explicitly. */
+                    if (s->tx_fifo_count < 256) {
+                        s->tx_fifo[s->tx_fifo_count++] = value;
                     }
-                    /* Pad: keep NDF+1 entries so dw_reader never stalls */
-                    if (s->rx_fifo_count < 256) {
-                        s->rx_fifo[s->rx_fifo_count++] = 0;
-                    }
+                    break;
                 } else {
                     /* Single frame (or NDF=0): push response to FIFO */
                     s->ndf_pending = false;
